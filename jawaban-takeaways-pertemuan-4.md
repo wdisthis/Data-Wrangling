@@ -3,11 +3,9 @@
 *Data Wrangling – Latihan 1–5.* Kode ditulis untuk dijalankan di notebook pada berkas data Anda. Nama kolom adalah asumsi dari soal, jadi sesuaikan bila berbeda. Angka hasil eksekusi tidak saya klaim. Angka yang dipakai hanya yang ada di soal atau hasil hitung tangan dari angka soal.
 
 ```python
-# Setup umum
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from io import StringIO
 pd.set_option("display.width", 140)
 ```
 
@@ -27,95 +25,65 @@ Deliverables: missing-value map, tabel keputusan + evidence, assumption log, ≥
 ## Kode
 
 ```python
-raw = """id,usia,prodi,status_kerja,jam,pendapatan,berat
-1,19,Sains Data,tidak bekerja,,0,52
-2,20,Sains Data,bekerja,12,1500000,61
-3,99,Matematika,bekerja,20,2000000,58
-4,21,,tidak bekerja,-1,0,999
-5,,Fisika,Unknown,,,-
-6,22,Unknown,bekerja,0,1200000,70
-7,18,Fisika,bekerja,15,N/A,64
-8,23,Matematika,tidak bekerja,,-,55
-9,20,Sains Data,bekerja,999,2500000,0
-10,19,Kimia,tidak bekerja,,,49
-11,21,Kimia,bekerja,10,0,57
-12,20,Fisika,-,,,62
-"""
+txt = pd.read_csv("L1_survei_kerja_raw.csv", keep_default_na=False, dtype=str)
+nat = pd.read_csv("L1_survei_kerja_raw.csv")
 
-# (a) Baca MENTAH: semua teks, tidak ada NaN otomatis -> kita yang memutuskan
-txt = pd.read_csv(StringIO(raw), keep_default_na=False, dtype=str)
-
-# (b) Baca BAWAAN pandas, untuk pembanding
-nat = pd.read_csv(StringIO(raw))
-
-# ---------- Aturan klasifikasi (satu baris -> satu label per kolom) ----------
 def classify(r):
     s = r.status_kerja
     bekerja, tdk = (s == "bekerja"), (s == "tidak bekerja")
     o = {}
 
-    # usia: kosong = missing; 99 = batas atas dropdown, mencurigakan -> belum diputuskan
     o["usia"] = ("missing" if r.usia == "" else
                  "undecided" if r.usia == "99" else "valid")
 
-    # prodi: kosong / Unknown = missing eksplisit
     o["prodi"] = "missing" if r.prodi in ("", "Unknown") else "valid"
 
-    # status_kerja: '', '-', Unknown = missing
     o["status_kerja"] = "missing" if s in ("", "-", "Unknown") else "valid"
 
-    # jam: hanya terisi jika bekerja (kamus data)
     j = r.jam
     if tdk:
-        o["jam"] = "struktural"            # kosong / -1 pada tidak bekerja = memang tidak berlaku
+        o["jam"] = "struktural"
     elif bekerja:
         if j in ("", "-1", "999"):
-            o["jam"] = "missing"           # sentinel / kosong padahal seharusnya terisi
+            o["jam"] = "missing"
         elif j == "0":
-            o["jam"] = "undecided"         # bekerja tetapi 0 jam: kontradiktif
+            o["jam"] = "undecided"
         else:
             o["jam"] = "valid"
-    else:                                  # status sendiri missing -> tidak bisa memutuskan
+    else:
         o["jam"] = "undecided"
 
-    # pendapatan: 0 = tidak berpenghasilan (kamus), jadi kosong pada tidak bekerja ambigu
     p = r.pendapatan
     if p in ("", "-", "N/A"):
         o["pendapatan"] = "undecided" if tdk else "missing"
     elif p == "0":
-        o["pendapatan"] = "valid" if tdk else "undecided"   # bekerja tapi 0 -> perlu konfirmasi
+        o["pendapatan"] = "valid" if tdk else "undecided"
     else:
         o["pendapatan"] = "valid"
 
-    # berat: '-', 999, 0 mustahil secara fisik -> missing
     o["berat"] = "missing" if r.berat in ("", "-", "999", "0") else "valid"
     return pd.Series(o)
 
 label = txt.apply(classify, axis=1)
 label.insert(0, "id", txt["id"])
-print(label)                                  # missing-value map
+print(label)
 
-# ---------- Missing profile setelah klasifikasi ----------
 profil = (label.drop(columns="id")
                .apply(lambda c: c.value_counts())
                .fillna(0).astype(int).T)
 print(profil)
 
-# ---------- Pembanding: NaN bawaan pandas ----------
 print(nat.isna().sum())
-print(nat.dtypes)        # 'pendapatan' & 'berat' jadi teks karena ada '-' / 'N/A'
+print(nat.dtypes)
 
-# ---------- Dampak ke E4 ----------
 txt["jam_n"] = pd.to_numeric(txt["jam"], errors="coerce")
 
-# Naif (bawaan pandas: -1, 0, 999, Unknown ikut dihitung)
 naif = nat.assign(jam_n=pd.to_numeric(nat["jam"], errors="coerce")).groupby("prodi").apply(
     lambda g: pd.Series({"n": len(g),
                          "prop_bekerja": (g.status_kerja == "bekerja").mean(),
                          "mean_jam": g.jam_n.mean()}))
 print(naif)
 
-# Setelah klasifikasi: hanya status & jam yang valid
 ok_s = (label.prodi == "valid") & (label.status_kerja == "valid")
 bersih_prop = (txt[ok_s].groupby("prodi")
                .apply(lambda g: pd.Series({"n_valid": len(g),
@@ -212,32 +180,22 @@ Survei kesejahteraan (N = 480). Skor stres kosong 22%. Evidence E1–E5 (missing
 ## Kode
 
 ```python
-# Template: sesuaikan nama kolom dengan data survei
-# df: kolom 'angkatan', 'gender', 'skor_stres', 'halaman_terakhir', 'pekan_uts'
 from scipy import stats
-import statsmodels.formula.api as smf   # pip install statsmodels bila perlu
+import statsmodels.formula.api as smf
 
 df["miss"] = df["skor_stres"].isna().astype(int)
 
-# 1) Missingness per kelompok
 print(df.groupby("angkatan").miss.mean())
 print(df.groupby("gender").miss.mean())
 
-# 2) Uji hubungan missingness vs kategori (chi-square)
 for var in ["angkatan", "gender"]:
     tab = pd.crosstab(df[var], df["miss"])
     chi2, p, dof, _ = stats.chi2_contingency(tab)
     print(var, f"chi2={chi2:.2f}, dof={dof}, p={p:.4f}")
 
-# 3) Uji MCAR informal: logistic regression missingness ~ kovariat teramati
 m = smf.logit("miss ~ C(angkatan) + C(gender) + halaman_terakhir", data=df).fit()
 print(m.summary())
 
-# 4) Little's MCAR test (opsional, butuh pustaka tambahan):
-#    from pyampute.exploration.mcar_statistical_tests import MCARTest
-#    print(MCARTest(method="little")(df[["skor_stres", "..."]]))
-
-# 5) Kekuatan E5: interval kepercayaan Wilson untuk 6 dari 9
 def wilson(k, n, z=1.96):
     p = k / n
     den = 1 + z**2 / n
@@ -245,16 +203,14 @@ def wilson(k, n, z=1.96):
     h = z * np.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / den
     return c - h, c + h
 
-print("Wilson 6/9:", wilson(6, 9))        # kira-kira (0.35, 0.88)
-print("Tingkat respons telepon:", 9 / 20) # 45%
+print("Wilson 6/9:", wilson(6, 9))
+print("Tingkat respons telepon:", 9 / 20)
 
-# 6) Analisis sensitivitas delta (pattern-mixture)
 obs_mean = pd.Series({2025: 24.1, 2024: 22.8, 2023: 21.9, 2022: 23.5})
 pi_mis   = pd.Series({2025: 0.31, 2024: 0.24, 2023: 0.17, 2022: 0.12})
 
 rows = {}
 for delta in [0, 2, 4, 6]:
-    # mean_total = (1 - pi) * mean_obs + pi * (mean_obs + delta) = mean_obs + pi * delta
     rows[f"delta={delta}"] = (obs_mean + pi_mis * delta).round(2)
 sens = pd.DataFrame(rows)
 print(sens)
@@ -316,25 +272,22 @@ Survei pengeluaran bulanan (N = 150). Tujuan: rata-rata `pengeluaran` per fakult
 ## Kode
 
 ```python
-from sklearn.experimental import enable_iterative_imputer   # noqa: F401
-from sklearn.impute import IterativeImputer, SimpleImputer, KNNImputer
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+from sklearn.impute import IterativeImputer, KNNImputer
 from sklearn.linear_model import BayesianRidge
+import statsmodels.formula.api as smf
 
-df = pd.read_csv("data/latihan/L3_pengeluaran_mahasiswa.csv")
-# kolom: pengeluaran, jarak_kos_km, uang_saku, beasiswa, fakultas
+df = pd.read_csv("L3_pengeluaran_mahasiswa.csv")
 
-# ---------- 0. Diagnostik mekanisme ----------
 df["miss_peng"] = df["pengeluaran"].isna().astype(int)
 print(df.isna().agg(["sum", "mean"]).T)
 print(df.groupby("fakultas").miss_peng.agg(["sum", "count", "mean"]))
-print(df.groupby("miss_peng").uang_saku.mean())            # 1.69 vs 2.30 (E5)
+print(df.groupby("miss_peng").uang_saku.mean())
 print(df.groupby("beasiswa", dropna=False).miss_peng.mean())
 
-import statsmodels.formula.api as smf
-print(smf.logit("miss_peng ~ uang_saku + jarak_kos_km + C(fakultas)", data=df.dropna(subset=["uang_saku"])).fit().summary())
+print(smf.logit("miss_peng ~ uang_saku + jarak_kos_km + C(fakultas)",
+                data=df.dropna(subset=["uang_saku"])).fit().summary())
 
-# ---------- Persiapan fitur numerik ----------
-# SESUAIKAN pemetaan beasiswa dengan isi kolomnya (ya/tidak, 1/0, dsb.)
 b = df["beasiswa"].astype("string").str.lower().map(
         {"ya": 1, "tidak": 0, "1": 1, "0": 0, "true": 1, "false": 0})
 X = pd.concat([
@@ -350,15 +303,12 @@ def ringkas(y, fak, nama):
     out.insert(0, "strategi", nama)
     return out
 
-# ---------- Strategi A: minimal deletion (complete case pada pengeluaran) ----------
 A = df.dropna(subset=["pengeluaran"])
 res_A = ringkas(A["pengeluaran"], A["fakultas"], "A deletion")
 
-# ---------- Strategi B: simple imputation (median) ----------
 y_B = df["pengeluaran"].fillna(df["pengeluaran"].median())
 res_B = ringkas(y_B, df["fakultas"], "B median")
 
-# ---------- Strategi C: MICE (m = 5, sample_posterior=True) ----------
 m = 5
 imputed = []
 for s in range(m):
@@ -366,7 +316,6 @@ for s in range(m):
                            max_iter=20, random_state=s)
     imputed.append(pd.DataFrame(imp.fit_transform(X), columns=X.columns, index=X.index))
 
-# Pooling (aturan Rubin) rata-rata per fakultas
 def rubin_mean(datasets, groups):
     out = {}
     for g in groups.unique():
@@ -383,7 +332,6 @@ def rubin_mean(datasets, groups):
 res_C = rubin_mean(imputed, df["fakultas"])
 print(res_C)
 
-# ---------- Perbandingan ----------
 bandingA = res_A["mean"].rename("A_deletion")
 bandingB = res_B["mean"].rename("B_median")
 bandingC = res_C["mean"].rename("C_mice")
@@ -391,12 +339,10 @@ cmp = pd.concat([bandingA, bandingB, bandingC], axis=1)
 cmp["range_antar_strategi"] = cmp.max(axis=1) - cmp.min(axis=1)
 print(cmp)
 
-# ---------- (Opsional) KNN sebagai pembanding ----------
 knn = KNNImputer(n_neighbors=5)
 Xk = pd.DataFrame(knn.fit_transform(X), columns=X.columns, index=X.index)
 print(Xk.groupby(df["fakultas"]).pengeluaran.mean())
 
-# ---------- Diagnostik MICE: distribusi nilai imputasi vs teramati ----------
 obs = df["pengeluaran"].dropna()
 mis_idx = df["pengeluaran"].isna()
 plt.hist(obs, bins=20, alpha=.5, density=True, label="teramati")
@@ -439,20 +385,16 @@ Tiga analis mengolah berkas Latihan 3 dengan cara berbeda (A deletion, B median,
 ## Kode
 
 ```python
-# Verifikasi aritmetika dari tabel soal (tidak butuh dataset)
 n_all, n_obs, n_mis = 150, 126, 24
 mean_A, med = 2.10, 2.00
 
-# B: median imputation -> mean harus = (n_obs*mean_A + n_mis*median)/n
 mean_B = (n_obs * mean_A + n_mis * med) / n_all
-print("mean B (hitung):", round(mean_B, 3))                     # ~2.084 -> 2.08
+print("mean B (hitung):", round(mean_B, 3))
 
-# SD B: seluruh nilai imputasi = median (deviasi 0 terhadap median, kurang lebih)
 sd_A = 0.57
 sd_B_approx = np.sqrt((n_obs - 1) * sd_A**2 / (n_all - 1))
-print("SD B (hampir):", round(sd_B_approx, 3))                  # ~0.52
+print("SD B (hampir):", round(sd_B_approx, 3))
 
-# Per fakultas
 tabel = pd.DataFrame({
     "fak": ["FS", "FTI", "FTIK"],
     "n": [62, 55, 33],
@@ -464,15 +406,13 @@ tabel = pd.DataFrame({
 tabel["n_obs"] = tabel.n - tabel.miss
 tabel["pct_miss"] = (tabel.miss / tabel.n * 100).round(1)
 
-# Rata-rata nilai yang diimputasi MICE (hitung balik)
 tabel["mean_imputed_C"] = ((tabel.n * tabel.mean_C - tabel.n_obs * tabel.mean_A) / tabel.miss).round(2)
 tabel["selisih_C_vs_A"] = (tabel.mean_C - tabel.mean_A).round(2)
 print(tabel)
 
 mean_imp_all = (n_all * 2.18 - n_obs * 2.10) / n_mis
-print("Rata-rata nilai imputasi MICE (keseluruhan):", round(mean_imp_all, 2))   # ~2.60
+print("Rata-rata nilai imputasi MICE (keseluruhan):", round(mean_imp_all, 2))
 
-# Perkiraan CI kasar FTIK (SD ~0.57, n_obs=30)
 se = 0.57 / np.sqrt(30)
 print("FTIK CI 95% kasar:", 2.13 - 1.96 * se, 2.13 + 1.96 * se)
 ```
@@ -534,22 +474,18 @@ Layanan konseling ingin melaporkan proporsi klien yang membaik (PHQ-9 turun ≥ 
 ## Kode
 
 ```python
-from sklearn.experimental import enable_iterative_imputer   # noqa: F401
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer
 from sklearn.linear_model import BayesianRidge
 
 df = pd.read_csv("L5_konseling.csv")
-# Asumsi kolom: phq9_awal, phq9_akhir, status_layanan ('selesai'/'berhenti'),
-#               jenis_layanan, jumlah_sesi, alasan_rujukan
 N = len(df)
 
-# ---------- 1. Profil missing & mekanisme ----------
 print(df.isna().mean().round(3))
-print(df.groupby("status_layanan").phq9_akhir.apply(lambda s: s.isna().mean()))   # 15% vs 74%
+print(df.groupby("status_layanan").phq9_akhir.apply(lambda s: s.isna().mean()))
 df["miss_akhir"] = df.phq9_akhir.isna().astype(int)
-print(df.groupby("miss_akhir").phq9_awal.mean())                                  # 11.0 vs 14.2
+print(df.groupby("miss_akhir").phq9_awal.mean())
 
-# ---------- 2. Definisi outcome ----------
 df["turun"] = df.phq9_awal - df.phq9_akhir
 df["membaik"] = np.where(df.turun.notna(), (df.turun >= 5).astype(float), np.nan)
 
@@ -557,21 +493,18 @@ obs = df.membaik.dropna()
 p_obs = obs.mean()
 n_obs, n_mis = len(obs), N - len(obs)
 
-# ---------- 3. Batas Manski (tanpa asumsi apa pun) ----------
-lower = p_obs * n_obs / N                 # semua yang hilang = tidak membaik
-upper = (p_obs * n_obs + n_mis) / N       # semua yang hilang = membaik
+lower = p_obs * n_obs / N
+upper = (p_obs * n_obs + n_mis) / N
 print(f"Batas tanpa asumsi: [{lower:.3f}, {upper:.3f}]  lebar = {upper - lower:.3f}")
 
-# ---------- 4. Estimasi terstrata (MAR bersyarat pada status layanan) ----------
 strata = df.groupby("status_layanan").agg(
     N_s=("membaik", "size"),
     n_obs=("membaik", "count"),
     p_hat=("membaik", "mean"))
-strata["r_s"] = strata.n_obs / strata.N_s            # tingkat teramati
+strata["r_s"] = strata.n_obs / strata.N_s
 p_strat = (strata.N_s / N * strata.p_hat).sum()
 print(strata); print("Estimasi terstrata:", round(p_strat, 3))
 
-# ---------- 5. Analisis sensitivitas / tipping point (delta pada 'berhenti') ----------
 def p_delta(delta_berhenti, delta_selesai=0.0):
     tot = 0
     for s, d in [("selesai", delta_selesai), ("berhenti", delta_berhenti)]:
@@ -583,13 +516,9 @@ def p_delta(delta_berhenti, delta_selesai=0.0):
 grid = np.round(np.arange(-0.4, 0.41, 0.1), 1)
 sens = pd.DataFrame({"delta_berhenti": grid, "p_total": [p_delta(d) for d in grid]})
 print(sens)
-# tipping point: delta di mana p_total melewati ambang keputusan (mis. 0.50)
-# idx = (sens.p_total - 0.50).abs().idxmin(); print(sens.loc[idx])
 
-# ---------- 6. Multiple imputation (m = 20) ----------
 X = pd.concat([df[["phq9_awal", "phq9_akhir", "jumlah_sesi"]],
                pd.get_dummies(df[["status_layanan", "jenis_layanan"]], dtype=float)], axis=1)
-# alasan_rujukan sengaja TIDAK dimasukkan (Jan-Mar hilang total, tidak dapat dipulihkan)
 
 m, ps, vs = 20, [], []
 for s in range(m):
